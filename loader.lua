@@ -1,15 +1,17 @@
 -- ============================================
--- LOADER — fetches WindUI + payload
+-- LOADER — give this to buyers
+-- Only edit the CONFIG block below
 -- ============================================
 local API_URL   = "https://key-system-production-a74e.up.railway.app/auth"
 local SCRIPT_ID = "default"
 local KEY_FILE  = "myscript_key.txt"
-
--- WindUI source URL (update this if WindUI moves)
-local WINDUI_URL = "https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"
 -- ============================================
 
 local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 
 -- ---------- HWID ----------
 local function getHWID()
@@ -25,7 +27,7 @@ local function getHWID()
     return ok and tostring(id) or "unknown"
 end
 
--- ---------- Key storage ----------
+-- ---------- Key file ----------
 local function readKeyFile()
     if readfile and isfile and isfile(KEY_FILE) then
         local ok, data = pcall(readfile, KEY_FILE)
@@ -33,11 +35,18 @@ local function readKeyFile()
     end
     return nil
 end
+
 local function writeKeyFile(k)
     if writefile then pcall(writefile, KEY_FILE, k) end
 end
 
--- ---------- Auth ----------
+local function deleteKeyFile()
+    if delfile and isfile and isfile(KEY_FILE) then
+        pcall(delfile, KEY_FILE)
+    end
+end
+
+-- ---------- Auth request ----------
 local function authenticate(key)
     local body = HttpService:JSONEncode({
         key = key,
@@ -58,42 +67,16 @@ local function authenticate(key)
     if not response or not response.Body then return nil, "empty response" end
 
     local decoded
-    local ok2 = pcall(function() decoded = HttpService:JSONDecode(response.Body) end)
+    local ok2 = pcall(function()
+        decoded = HttpService:JSONDecode(response.Body)
+    end)
     if not ok2 or not decoded then return nil, "bad response" end
     if not decoded.ok then return nil, decoded.error or "auth failed" end
 
     return decoded.payload
 end
 
--- ---------- WindUI loader ----------
-local function loadWindUI()
-    if getgenv().WindUI then return true end
-
-    local ok, src = pcall(function()
-        return game:HttpGet(WINDUI_URL)
-    end)
-    if not ok or not src or #src < 100 then
-        warn("[Loader] Failed to fetch WindUI")
-        return false
-    end
-
-    local fn, err = loadstring(src)
-    if not fn then
-        warn("[Loader] WindUI compile error: " .. tostring(err))
-        return false
-    end
-
-    local ok2, ui = pcall(fn)
-    if not ok2 or not ui then
-        warn("[Loader] WindUI runtime error: " .. tostring(ui))
-        return false
-    end
-
-    getgenv().WindUI = ui
-    return true
-end
-
--- ---------- Key UI (uses WindUI if available, else plain) ----------
+-- ---------- Key UI ----------
 local function createKeyUI()
     if getgenv()._keyUI then
         pcall(function() getgenv()._keyUI:Destroy() end)
@@ -104,11 +87,21 @@ local function createKeyUI()
     gui.Name = "KeySystemUI"
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
-    pcall(function() gui.Parent = game:GetService("CoreGui") end)
-    if not gui.Parent then
-        pcall(function() gui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui") end)
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    local parented = pcall(function() gui.Parent = CoreGui end)
+    if not parented then
+        pcall(function() gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui") end)
     end
+
     getgenv()._keyUI = gui
+
+    local backdrop = Instance.new("Frame")
+    backdrop.Size = UDim2.new(1, 0, 1, 0)
+    backdrop.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    backdrop.BackgroundTransparency = 1
+    backdrop.BorderSizePixel = 0
+    backdrop.Parent = gui
 
     local panel = Instance.new("Frame")
     panel.Size = UDim2.new(0, 340, 0, 220)
@@ -120,6 +113,7 @@ local function createKeyUI()
 
     local stroke = Instance.new("UIStroke")
     stroke.Color = Color3.fromRGB(50, 58, 72)
+    stroke.Thickness = 1
     stroke.Parent = panel
 
     local title = Instance.new("TextLabel")
@@ -152,6 +146,7 @@ local function createKeyUI()
 
     local inputStroke = Instance.new("UIStroke")
     inputStroke.Color = Color3.fromRGB(42, 49, 64)
+    inputStroke.Thickness = 1
     inputStroke.Parent = inputFrame
 
     local input = Instance.new("TextBox")
@@ -190,11 +185,12 @@ local function createKeyUI()
     status.Font = Enum.Font.Gotham
     status.Parent = panel
 
-    -- drag
     local dragging, dragStart, startPos
     panel.InputBegan:Connect(function(inp)
         if inp.UserInputType == Enum.UserInputType.MouseButton1 or inp.UserInputType == Enum.UserInputType.Touch then
-            dragging = true; dragStart = inp.Position; startPos = panel.Position
+            dragging = true
+            dragStart = inp.Position
+            startPos = panel.Position
         end
     end)
     panel.InputEnded:Connect(function(inp)
@@ -202,7 +198,7 @@ local function createKeyUI()
             dragging = false
         end
     end)
-    game:GetService("UserInputService").InputChanged:Connect(function(inp)
+    UserInputService.InputChanged:Connect(function(inp)
         if dragging and (inp.UserInputType == Enum.UserInputType.MouseMovement or inp.UserInputType == Enum.UserInputType.Touch) then
             local delta = inp.Position - dragStart
             panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
@@ -215,6 +211,7 @@ local function createKeyUI()
             status.Text = "Please enter a valid key"
             return
         end
+
         status.TextColor3 = Color3.fromRGB(251, 191, 36)
         status.Text = "Checking..."
         btn.Text = "..."
@@ -231,13 +228,12 @@ local function createKeyUI()
             status.TextColor3 = Color3.fromRGB(126, 231, 135)
             status.Text = "Success!"
             btn.Text = "Loading..."
+
             writeKeyFile(k)
             task.wait(0.3)
+
             gui:Destroy()
             getgenv()._keyUI = nil
-
-            -- Make sure WindUI is available before running the payload
-            loadWindUI()
 
             local fn, compileErr = loadstring(payload)
             if not fn then
@@ -252,14 +248,13 @@ local function createKeyUI()
     end
 
     btn.MouseButton1Click:Connect(submit)
-    input.FocusLost:Connect(function(enter) if enter then submit() end end)
+    input.FocusLost:Connect(function(enter)
+        if enter then submit() end
+    end)
 end
 
 -- ---------- Main ----------
 local function main()
-    -- Pre-fetch WindUI silently so it's ready when payload runs
-    task.spawn(loadWindUI)
-
     local saved = readKeyFile()
     if saved then
         saved = saved:gsub("%s+", "")
@@ -269,14 +264,16 @@ local function main()
                 local fn, compileErr = loadstring(payload)
                 if fn then
                     local ok, runErr = pcall(fn)
-                    if not ok then warn("[Loader] Payload runtime error: " .. tostring(runErr)) end
+                    if not ok then
+                        warn("[Loader] Payload runtime error: " .. tostring(runErr))
+                    end
                     return
                 else
                     warn("[Loader] Payload compile error: " .. tostring(compileErr))
                 end
             else
                 warn("[Loader] Saved key failed: " .. tostring(err))
-                if delfile and isfile and isfile(KEY_FILE) then pcall(delfile, KEY_FILE) end
+                deleteKeyFile()
             end
         end
     end
